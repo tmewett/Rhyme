@@ -1,0 +1,185 @@
+#!/usr/bin/env ruby
+
+Type = Struct.new(:kind, :x) do
+    def to_s
+        case kind
+        when :type
+            x.to_s
+        end
+    end
+end
+
+StackEffect = Struct.new(:bindings, :pre, :post) do
+
+    def instantiate(stack_type)
+        raise ArgumentError if stack_type.length != pre.length
+        # Bind word effect vars to types on stack
+        vars = {}
+        stack_type.zip(pre) do |st, wt|
+            if wt.kind == :var && wt.x < bindings
+                # Disallow multiple matches (this is where inference will happen)
+                if vars.include?(wt.x) && vars[wt.x] != st
+                    puts "Multiple conflicting matches for a type var"
+                    return nil
+                end
+                vars[wt.x] = st
+            elsif st != wt
+                puts "#{st} does not match #{wt}"
+                return nil
+            end
+        end
+        # Substitute bound vars in post-word effect
+        return post.map do |pt|
+            if pt.kind == :var && vars.include?(pt.x)
+                vars[pt.x]
+            else
+                pt
+            end
+        end
+    end
+
+end
+
+IntT = Type.new(:type, :Int)
+FloatT = Type.new(:type, :Float)
+XT = Struct.new(:effect, :impl)
+
+class VM
+
+    def initialize
+        @words = Hash.new { |h, k| h[k] = [] }
+
+        @input = $stdin
+
+        @data_stack = []
+        @type_stack = []
+
+        @compiling = false
+        @defining = false
+
+        @_line_buf = []
+    end
+
+    def primitive(effect_str, name, &impl)
+        @words[name] << XT.new(parse_stack_effect(effect_str), impl)
+    end
+
+    # This will probably turn into a parse_type function
+    def parse_stack_effect(str)
+        tokens = str.split
+        allow_binds = true
+        bound_names = []
+        parsed = StackEffect.new(0, [], [])
+        cur = parsed.pre
+        tokens.each do |tok|
+            if allow_binds && tok == '--'
+                allow_binds = false
+                cur = parsed.post
+            elsif tok[0] =~ /[[:lower:]]/
+                if i = bound_names.index(tok)
+                    cur << Type.new(:var, i)
+                elsif allow_binds
+                    i = bound_names.length
+                    bound_names << tok
+                    cur << Type.new(:var, i)
+                else
+                    raise
+                end
+            else
+                # TODO lookup
+                cur << Type.new(:type, tok.to_sym)
+            end
+        end
+        parsed.bindings = bound_names.length
+        parsed
+    end
+
+    def stack_match(effect)
+        effect.instantiate(@type_stack[-effect.pre.length ..])
+    end
+
+    # Get a matching word definition with the given name
+    def dispatch(name)
+        impls = @words[name]
+        return nil if impls.empty?
+        xt = impls.find { |xt| stack_match(xt.effect) }
+        if xt.nil?
+            raise "can't find matching definition for #{name.inspect} on current stack"
+        end
+        xt
+    end
+
+    def execute(xt)
+        post = stack_match(xt.effect)
+        raise "wrong types on stack" if post.nil?
+        instance_eval(&xt.impl)
+        @type_stack.pop(xt.effect.pre.length)
+        @type_stack += post
+    end
+
+    def _put_stack
+        @data_stack.zip(@type_stack) do |x, t|
+            print "(#{x} : #{t}) "
+        end
+        print "\n"
+    end
+
+    def parse
+        if @_line_buf.empty?
+            _put_stack
+            print('> ')
+            @_line_buf = @input.gets.split
+        end
+        @_line_buf.shift
+    end
+
+    def push(x)
+        @data_stack << x
+    end
+
+    def pop
+        @data_stack.pop
+    end
+
+    def interpret(word)
+        if word =~ /^-?\d+$/
+            push(word.to_i)
+            @type_stack << IntT
+        elsif word =~ /^-?\d+\.\d+$/
+            push(word.to_f)
+            @type_stack << FloatT
+        elsif xt = dispatch(word.to_sym)
+            execute(xt)
+        else
+            puts "error: unrecognised word"
+        end
+    end
+
+    def run
+        while word = parse
+            if @compiling
+                compile(word)
+            else
+                interpret(word)
+            end
+        end
+    end
+
+end
+
+vm = VM.new
+
+vm.primitive 'Int Int -- Int', :+ do
+    push(pop + pop)
+end
+
+vm.primitive 'a -- a a', :dup do
+    push(@data_stack[-1])
+end
+
+begin
+    vm.run
+rescue
+    p vm
+    raise
+end
