@@ -124,13 +124,20 @@ class VM
         print "\n"
     end
 
-    def parse
-        if @_line_buf.empty?
-            _put_stack
-            print('> ')
-            @_line_buf = @input.gets.split
+    def getc
+        @input.getc
+    end
+
+    def read_while
+        buf = c = getc
+        while (yield c)
+            buf << (c = getc)
         end
-        @_line_buf.shift
+        buf
+    end
+
+    def read_word
+        word = read_while { |c| !(c == ' ' || c == "\n") }
     end
 
     def push(x)
@@ -156,11 +163,14 @@ class VM
     end
 
     def run
-        while word = parse
+        while word = read_word
+            eol = (word[-1] == "\n")
+            word = word[...-1]
             if @compiling
                 compile(word)
             else
                 interpret(word)
+                _put_stack if eol
             end
         end
     end
