@@ -44,18 +44,44 @@ IntT = Type.new(:type, :Int)
 FloatT = Type.new(:type, :Float)
 XT = Struct.new(:effect, :impl)
 
+def whitespace?(c)
+    c == ' ' || c == "\n"
+end
+
+InputStream = Struct.new(:io) do
+    def getc
+        io.getc
+    end
+
+    def peek
+        c = io.getc
+        io.ungetc(c)
+        c
+    end
+
+    def read_until
+        buf = ""
+        while !(yield c = io.getc)
+            buf << c
+        end
+        io.ungetc(c)
+        buf
+    end
+end
+
 class VM
 
     def initialize
         @words = Hash.new { |h, k| h[k] = [] }
 
-        @input = $stdin
+        @input = InputStream.new($stdin)
 
         @data_stack = []
         @type_stack = []
 
         @compiling = false
         @defining = false
+        @type_reg = nil
 
         @_line_buf = []
     end
@@ -124,20 +150,9 @@ class VM
         print "\n"
     end
 
-    def getc
-        @input.getc
-    end
-
-    def read_while
-        buf = c = getc
-        while (yield c)
-            buf << (c = getc)
-        end
-        buf
-    end
-
     def read_word
-        word = read_while { |c| !(c == ' ' || c == "\n") }
+        @input.read_until { |c| !whitespace?(c) }
+        word = @input.read_until(&method(:whitespace?))
     end
 
     def push(x)
@@ -158,19 +173,17 @@ class VM
         elsif xt = dispatch(word.to_sym)
             execute(xt)
         else
-            puts "error: unrecognised word"
+            puts "error: unrecognised word #{word.inspect}"
         end
     end
 
     def run
         while word = read_word
-            eol = (word[-1] == "\n")
-            word = word[...-1]
             if @compiling
                 compile(word)
             else
                 interpret(word)
-                _put_stack if eol
+                _put_stack if whitespace?(@input.peek)
             end
         end
     end
@@ -189,7 +202,6 @@ end
 
 begin
     vm.run
-rescue
+ensure
     p vm
-    raise
 end
