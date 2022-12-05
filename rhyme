@@ -80,7 +80,9 @@ class VM
         @type_stack = []
 
         @compiling = false
-        @defining = false
+        @defn_type_stack = nil
+        @defn_decl_type = nil
+        @defining = nil
         @type_reg = nil
 
         @_line_buf = []
@@ -121,7 +123,8 @@ class VM
     end
 
     def stack_match(effect)
-        effect.instantiate(@type_stack[-effect.pre.length ..])
+        type_stack = @compiling ? @defn_type_stack : @type_stack
+        effect.instantiate(type_stack[-effect.pre.length ..])
     end
 
     # Get a matching word definition with the given name
@@ -152,7 +155,7 @@ class VM
 
     def read_word
         @input.read_until { |c| !whitespace?(c) }
-        word = @input.read_until(&method(:whitespace?))
+        word = @input.read_until { |c| whitespace?(c) }
     end
 
     def push(x)
@@ -177,6 +180,20 @@ class VM
         end
     end
 
+    def compile(word)
+        if word =~ /^-?\d+$/
+            @defining << (word.to_i)
+            @defn_type_stack << IntT
+        elsif word =~ /^-?\d+\.\d+$/
+            @defining << (word.to_f)
+            @defn_type_stack << FloatT
+        elsif xt = dispatch(word.to_sym)
+            execute(xt)
+        else
+            puts "error: unrecognised word #{word.inspect}"
+        end
+    end
+
     def run
         while word = read_word
             if @compiling
@@ -194,6 +211,21 @@ vm = VM.new
 
 vm.primitive 'Int Int -- Int', :+ do
     push(pop + pop)
+end
+
+vm.primitive '--', :'(' do
+    desc = @input.read_until { |c| c == ')' }
+    @input.getc
+    @type_reg = parse_stack_effect(desc)
+end
+
+vm.primitive '--', :':' do
+    name = read_word
+    @compiling = true
+    @defining = []
+    @defn_decl_type = @type_reg
+    @defn_type_stack = @type_reg.pre
+    words[name.to_sym] << XT.new(@defn_decl_type, @defining)
 end
 
 vm.primitive 'a -- a a', :dup do
